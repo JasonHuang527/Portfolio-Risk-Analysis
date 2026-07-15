@@ -1,0 +1,17 @@
+# Excel / Office lock & temp files
+~$*
+*.tmp
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Python (if you add scripts later)
+__pycache__/
+*.pyc
+.venv/
+env/
