@@ -5,7 +5,7 @@ hold up? I tested it with data: a concentrated basket of 9 popular large-cap tec
 the S&P 500 over ~4.5 years (Jan 2022 – Jul 2026), comparing them on **return, risk, and
 risk-adjusted return** rather than headline performance alone.
 
-## TL;DR
+## Key Findings
 
 The concentrated portfolio **beat the index on return** and was even **slightly better
 risk-adjusted** — but it paid for it with far more volatility and a much deeper drawdown.
