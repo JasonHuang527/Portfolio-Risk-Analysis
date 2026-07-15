@@ -14,11 +14,11 @@ pain* and zero research effort.
 
 | Metric | Tech Portfolio | S&P 500 | Takeaway |
 |---|---:|---:|---|
-| Annualized return (CAGR) | **18.1%** | 12.1% | Tech won on raw return |
-| Annualized volatility | 24.6% | **17.6%** | Index was far calmer |
-| Sharpe ratio (rf = 2%) | **0.65** | 0.57 | Tech edged it, risk-adjusted |
-| Max drawdown | −36.2% | **−24.5%** | Index fell about half as far |
-| Growth of $100 | **$211** | $167 | — |
+| Annualized return (CAGR) | **21.7%** | 12.1% | Tech won on raw return |
+| Annualized volatility | 30.7% | **17.6%** | Index was far calmer |
+| Sharpe ratio (rf = 2%) | **0.64** | 0.57 | Tech edged it, risk-adjusted |
+| Max drawdown | −47.8% | **−24.5%** | Index fell about half as far |
+| Growth of $100 | **$242** | $167 | — |
 
 ## Charts
 
@@ -40,7 +40,7 @@ pain* and zero research effort.
 2. **SQL structuring** — window functions turn raw prices into a clean metrics series:
    - `LAG()` for the previous day's value → daily returns
    - a running `MAX() OVER (... ROWS UNBOUNDED PRECEDING)` for the peak → the drawdown series
-   - See [`sql/portfolio_risk_metrics.sql`](sql/portfolio_risk_metrics.sql).
+   - See [`sql/`](sql/) — `createtable.sql`, `dailyreturnpct.sql`, `drawdown.sql`.
 3. **Excel** — the structured series feed live-formula risk metrics: CAGR, annualized volatility
    (daily-return stdev × √252), Sharpe vs. a 2% risk-free rate, and max drawdown. See
    [`excel/Portfolio_Risk_Analysis.xlsx`](excel/Portfolio_Risk_Analysis.xlsx).
@@ -62,7 +62,9 @@ portfolio-risk-analysis/
 ├── data/
 │   └── holdings.csv                 # tickers + share counts
 ├── sql/
-│   └── portfolio_risk_metrics.sql   # daily + monthly + headline metrics (window functions)
+│   ├── createtable.sql              # builds the holdings table
+│   ├── dailyreturnpct.sql           # daily portfolio value + daily returns (LAG)
+│   └── drawdown.sql                 # drawdown from running peak (MAX window)
 ├── excel/
 │   └── Portfolio_Risk_Analysis.xlsx # Summary, Charts, Holdings, daily data, monthly returns
 └── images/
@@ -78,8 +80,8 @@ portfolio-risk-analysis/
   market cap as of the start date, held fixed).
 - **Buy-and-hold, no rebalancing**, no transaction costs, no dividends reinvested on the single
   names.
-- The SQL is a faithful reconstruction of the original pipeline (the original query wasn't kept);
-  it reproduces the exact columns in the workbook but assumes a `prices` / `holdings` schema.
+- **Portfolio excludes SPY.** SPY is used only as the benchmark, not counted as a holding — so the
+  portfolio is the 9 stock picks alone, compared against the S&P 500.
 
 ## Tools
 

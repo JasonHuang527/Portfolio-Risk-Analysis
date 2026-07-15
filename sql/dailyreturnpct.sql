@@ -4,6 +4,7 @@ WITH daily_value AS (
            SUM(h.shares * p.Close) AS PortfolioValue
     FROM   stock_prices p
     JOIN   holdings h ON h.ticker = p.Ticker
+    WHERE  h.ticker <> 'SPY'          -- portfolio = 9 tech picks; SPY is benchmark only
     GROUP  BY p.Date
 )
 
