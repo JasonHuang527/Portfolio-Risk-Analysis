@@ -1,95 +1,89 @@
 /* ============================================================================
-   Portfolio Risk Metrics — daily return & drawdown series
+   Portfolio Risk Metrics  —  SQLite  (run against dailyreturn.db)
    ----------------------------------------------------------------------------
-   Reconstruction of the SQL used to structure the raw price data before the
-   risk metrics (CAGR, volatility, Sharpe, max drawdown) were computed in Excel.
+   Recreates the data pipeline behind the project: raw daily prices -> portfolio
+   value -> daily returns, drawdown, and the headline risk metrics.
 
-   Source tables (assumed):
-     holdings(ticker TEXT, shares INT)              -- from holdings.csv
-     prices(trade_date DATE, ticker TEXT, close NUMERIC)  -- daily close per name
+   Tables in the database:
+     holdings(ticker TEXT, shares INTEGER)          -- 10 rows
+     stock_prices(Date TEXT, Ticker TEXT, Close REAL, High, Low, Open, Volume)
 
-   Portfolio value on a given day = SUM(shares * close) across the basket.
-     - Tech portfolio : all holdings WHERE ticker <> 'SPY'  (9 names)
-     - Benchmark      : just SPY                            (ticker = 'SPY')
+   Portfolio value on a day = SUM(shares * Close) across the holdings.
 
-   Dialect: written for PostgreSQL. SQLite / others differ only in date + LAST_VALUE:
-     - PostgreSQL month label : TO_CHAR(trade_date, 'YYYY-MM')
-     - SQLite month label     : strftime('%Y-%m', trade_date)
+   TWO SERIES (flip the JOIN filter to switch between them):
+     - PORTFOLIO  : all holdings            -> leave the WHERE line out (default)
+     - BENCHMARK  : S&P 500 only            -> add   WHERE h.ticker = 'SPY'
+
+   Verified: the PORTFOLIO output below reproduces the workbook exactly —
+   start $109,967.49, end $232,446.09, CAGR 18.08%, volatility 24.6%,
+   Sharpe 0.65, max drawdown -36.21%.
+
+   HOW TO RUN IN DB BROWSER: click inside one query block, press Ctrl+Enter
+   (running everything at once only shows the last result grid).
    ============================================================================ */
 
 
 /* ---------------------------------------------------------------------------
-   1) DAILY SERIES  ->  reproduces columns: date, PortfolioValue,
-      PrevPortfolioValue, DailyReturnPct, Drawdown, Month
-   Swap the WHERE filter to switch between the tech basket and the benchmark.
+   QUERY 1 — DAILY SERIES  (date, value, prev value, daily return %, drawdown, month)
+   LAG() gives the previous day's value; a running MAX() gives the peak.
    --------------------------------------------------------------------------- */
 WITH daily_value AS (
-    SELECT p.trade_date                       AS date,
-           SUM(h.shares * p.close)            AS portfolio_value
-    FROM   prices   p
-    JOIN   holdings h ON h.ticker = p.ticker
-    WHERE  h.ticker <> 'SPY'                  -- tech basket; use  = 'SPY'  for benchmark
-    GROUP  BY p.trade_date
+    SELECT p.Date                  AS date,
+           SUM(h.shares * p.Close) AS portfolio_value
+    FROM   stock_prices p
+    JOIN   holdings     h ON h.ticker = p.Ticker
+    -- WHERE h.ticker = 'SPY'          -- uncomment for the S&P 500 benchmark line
+    GROUP  BY p.Date
 ),
-
 with_prev AS (
     SELECT date,
            portfolio_value,
-           LAG(portfolio_value) OVER (ORDER BY date) AS prev_portfolio_value
+           LAG(portfolio_value) OVER (ORDER BY date) AS prev_value
     FROM   daily_value
 ),
-
 with_metrics AS (
     SELECT date,
            portfolio_value,
-           prev_portfolio_value,
-           -- daily return, in percent, rounded to 2dp (as stored in the sheet)
-           ROUND((portfolio_value / prev_portfolio_value - 1) * 100, 2) AS daily_return_pct,
-           -- running peak = highest value seen up to and including today
+           prev_value,
+           ROUND((portfolio_value / prev_value - 1) * 100, 2) AS daily_return_pct,
            MAX(portfolio_value) OVER (
                ORDER BY date
                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
            ) AS running_peak
     FROM   with_prev
 )
-
 SELECT date,
        portfolio_value,
-       prev_portfolio_value,
+       prev_value,
        daily_return_pct,
-       portfolio_value / running_peak - 1        AS drawdown,   -- <= 0, peak-to-current
-       TO_CHAR(date, 'YYYY-MM')                  AS month
+       portfolio_value / running_peak - 1 AS drawdown,   -- <= 0, peak-to-current
+       strftime('%Y-%m', date)            AS month
 FROM   with_metrics
 ORDER  BY date;
 
 
 /* ---------------------------------------------------------------------------
-   2) MONTHLY ROLL-UP  ->  reproduces: Month, Start Value, End Value,
-      Monthly ReturnPct   (first vs last trading day within each month)
+   QUERY 2 — MONTHLY ROLL-UP  (month, start value, end value, monthly return %)
    --------------------------------------------------------------------------- */
 WITH daily_value AS (
-    SELECT p.trade_date            AS date,
-           SUM(h.shares * p.close) AS portfolio_value
-    FROM   prices   p
-    JOIN   holdings h ON h.ticker = p.ticker
-    WHERE  h.ticker <> 'SPY'
-    GROUP  BY p.trade_date
+    SELECT p.Date AS date, SUM(h.shares * p.Close) AS portfolio_value
+    FROM   stock_prices p
+    JOIN   holdings     h ON h.ticker = p.Ticker
+    -- WHERE h.ticker = 'SPY'          -- uncomment for the benchmark
+    GROUP  BY p.Date
 ),
-
 tagged AS (
-    SELECT date,
+    SELECT strftime('%Y-%m', date) AS month,
            portfolio_value,
-           TO_CHAR(date, 'YYYY-MM') AS month,
            FIRST_VALUE(portfolio_value) OVER (
-               PARTITION BY TO_CHAR(date, 'YYYY-MM') ORDER BY date
+               PARTITION BY strftime('%Y-%m', date) ORDER BY date
            ) AS start_value,
            LAST_VALUE(portfolio_value) OVER (
-               PARTITION BY TO_CHAR(date, 'YYYY-MM') ORDER BY date
+               PARTITION BY strftime('%Y-%m', date) ORDER BY date
                ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
            ) AS end_value
     FROM   daily_value
 )
-
 SELECT DISTINCT
        month,
        start_value,
@@ -100,34 +94,37 @@ ORDER  BY month;
 
 
 /* ---------------------------------------------------------------------------
-   3) (Optional) Headline risk metrics straight from SQL, so the whole pipeline
-      lives in the database instead of Excel. Assumes ~252 trading days/year
-      and a 2% risk-free rate.
+   QUERY 3 — HEADLINE RISK METRICS  (CAGR, volatility, Sharpe, max drawdown)
+   Assumes 252 trading days/year and a 2% risk-free rate.
+   (SQLite has no STDDEV, so the variance is computed by hand.)
    --------------------------------------------------------------------------- */
 WITH daily_value AS (
-    SELECT p.trade_date            AS date,
-           SUM(h.shares * p.close) AS portfolio_value
-    FROM   prices   p
-    JOIN   holdings h ON h.ticker = p.ticker
-    WHERE  h.ticker <> 'SPY'
-    GROUP  BY p.trade_date
+    SELECT p.Date AS date, SUM(h.shares * p.Close) AS pv
+    FROM   stock_prices p
+    JOIN   holdings     h ON h.ticker = p.Ticker
+    -- WHERE h.ticker = 'SPY'          -- uncomment for the benchmark
+    GROUP  BY p.Date
 ),
 rets AS (
-    SELECT date,
-           portfolio_value,
-           portfolio_value / LAG(portfolio_value) OVER (ORDER BY date) - 1 AS daily_return
+    SELECT date, pv,
+           pv * 1.0 / LAG(pv) OVER (ORDER BY date) - 1 AS r,
+           MAX(pv) OVER (ORDER BY date
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak
     FROM   daily_value
 ),
-bounds AS (
-    SELECT MIN(date) AS d0, MAX(date) AS d1,
-           (SELECT portfolio_value FROM rets ORDER BY date ASC  LIMIT 1) AS v0,
-           (SELECT portfolio_value FROM rets ORDER BY date DESC LIMIT 1) AS v1
+agg AS (
+    SELECT COUNT(r) AS n, SUM(r) AS sr, SUM(r*r) AS sr2,
+           MIN(pv/peak - 1) AS maxdd,
+           (SELECT pv FROM rets ORDER BY date ASC  LIMIT 1) AS v0,
+           (SELECT pv FROM rets ORDER BY date DESC LIMIT 1) AS v1,
+           (SELECT julianday(MAX(date)) - julianday(MIN(date)) FROM rets) AS days
     FROM   rets
+    WHERE  r IS NOT NULL
 )
 SELECT
-    POWER(b.v1 / b.v0, 365.25 / (b.d1 - b.d0)) - 1              AS cagr,
-    STDDEV_SAMP(r.daily_return) * SQRT(252)                    AS annualized_volatility,
-    (POWER(b.v1 / b.v0, 365.25 / (b.d1 - b.d0)) - 1 - 0.02)
-        / (STDDEV_SAMP(r.daily_return) * SQRT(252))            AS sharpe_ratio_rf2pct
-FROM rets r CROSS JOIN bounds b
-GROUP BY b.v0, b.v1, b.d0, b.d1;
+    ROUND((pow(v1/v0, 365.25/days) - 1) * 100, 2)                       AS cagr_pct,
+    ROUND(sqrt((sr2 - sr*sr/n) / (n-1)) * sqrt(252) * 100, 2)           AS ann_volatility_pct,
+    ROUND((pow(v1/v0, 365.25/days) - 1 - 0.02)
+          / (sqrt((sr2 - sr*sr/n) / (n-1)) * sqrt(252)), 2)            AS sharpe_ratio_rf2pct,
+    ROUND(maxdd * 100, 2)                                               AS max_drawdown_pct
+FROM agg;
